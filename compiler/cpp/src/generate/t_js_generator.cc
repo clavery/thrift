@@ -63,9 +63,11 @@ class t_js_generator : public t_oop_generator {
      iter = parsed_options.find("ng");
      gen_ng_ = (iter != parsed_options.end());
 
-	 if (gen_node_ && gen_jquery_) {
-       throw "Invalid switch: [-gen js:node,jquery,ng] options not compatible, try: [-gen js:node -gen js:jquery -gen js:ng]";
-	 }
+     if (gen_node_ && gen_jquery_) {
+       throw "Invalid switch: [-gen js:node,jquery] options not compatible, try: [-gen js:node -gen js:jquery]";
+     } else if (gen_node_ && gen_ng_) {
+       throw "Invalid switch: [-gen js:node,ng] options not compatible, try: [-gen js:node -gen js:ng]";
+     }
 
      if (gen_node_) {
        out_dir_base_ = "gen-nodejs";
