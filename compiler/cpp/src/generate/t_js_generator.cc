@@ -60,12 +60,17 @@ class t_js_generator : public t_oop_generator {
      iter = parsed_options.find("jquery");
      gen_jquery_ = (iter != parsed_options.end());
 
+     iter = parsed_options.find("ng");
+     gen_ng_ = (iter != parsed_options.end());
+
 	 if (gen_node_ && gen_jquery_) {
-       throw "Invalid switch: [-gen js:node,jquery] options not compatible, try: [-gen js:node -gen js:jquery]";
+       throw "Invalid switch: [-gen js:node,jquery,ng] options not compatible, try: [-gen js:node -gen js:jquery -gen js:ng]";
 	 }
 
      if (gen_node_) {
        out_dir_base_ = "gen-nodejs";
+     } else if (gen_ng_) {
+       out_dir_base_ = "gen-ng";
      } else {
        out_dir_base_ = "gen-js";
      }
@@ -214,6 +219,9 @@ class t_js_generator : public t_oop_generator {
         return p->get_name() + "_ttypes.";
       }
       return "ttypes.";
+    } else if (gen_ng_) {
+      // angular namespaces are used in modules, not types
+      return "";
     }
     return js_namespace(p);
   }
@@ -226,6 +234,11 @@ class t_js_generator : public t_oop_generator {
   }
 
   std::string js_namespace(t_program* p) {
+    if(gen_ng_) {
+      // angular namespaces are used in modules, not types
+      return "";
+    }
+
       std::string ns = p->get_namespace("js");
       if (ns.size() > 0) {
           ns += ".";
@@ -238,6 +251,14 @@ class t_js_generator : public t_oop_generator {
  private:
 
   /**
+   * Immediately invoked function expression
+   * used by angular (ng) mode to force function namespacing
+   * and avoid global name pollution
+   */
+  const std::string js_iife_start_ = "(function() {";
+  const std::string js_iife_end_ = "})();";
+
+  /**
    * True if we should generate NodeJS-friendly RPC services.
    */
   bool gen_node_;
@@ -246,6 +267,11 @@ class t_js_generator : public t_oop_generator {
    * True if we should generate services that use jQuery ajax (async/sync).
    */
   bool gen_jquery_;
+
+  /**
+   * True if we should generate services that use AngularJS modules and ajax
+   */
+  bool gen_ng_;
 
   /**
    * File streams
@@ -279,6 +305,9 @@ void t_js_generator::init_generator() {
 
   if (gen_node_) {
     f_types_ << "var ttypes = module.exports = {};" << endl;
+  } else if (gen_ng_) {
+    // wrap in an IIFE
+    f_types_ << js_iife_start_ << endl << endl;
   }
 
   string pns;
@@ -286,13 +315,25 @@ void t_js_generator::init_generator() {
   //setup the namespace
   // TODO should the namespace just be in the directory structure for node?
   vector<string> ns_pieces = js_namespace_pieces( program_ );
-  if( ns_pieces.size() > 0){
+  if( ns_pieces.size() > 0 && !gen_ng_){
     for(size_t i = 0; i < ns_pieces.size(); ++i) {
       pns += ((i == 0) ? "" : ".") + ns_pieces[i];
       f_types_ << "if (typeof " << pns << " === 'undefined') {" << endl;
         f_types_ << "  " << pns << " = {};" << endl;
         f_types_ << "}" << endl;
     }
+  } else if (gen_ng_) {
+    if (ns_pieces.size() == 0) {
+      // no namespace but we need something to create a module
+      pns = "Thrift";
+    } else {
+      for(size_t i = 0; i < ns_pieces.size(); ++i) {
+        pns += ((i == 0) ? "" : ".") + ns_pieces[i];
+      }
+    }
+
+    // declare the types module for structs, exceptions, etc
+    f_types_ << "var module = angular.module('" << pns << ".Types', []);" << endl << endl;
   }
 
 }
@@ -324,6 +365,9 @@ string t_js_generator::render_includes() {
     if (includes.size() > 0) {
       result += "\n";
     }
+  } else if (gen_ng_) {
+    // explicitly include an empty string for angular
+    result = "";
   }
 
   return result;
@@ -334,6 +378,10 @@ string t_js_generator::render_includes() {
  */
 void t_js_generator::close_generator() {
   // Close types file
+  
+  if (gen_ng_) {
+    f_types_ << endl << js_iife_end_ << endl;
+  }
 
   f_types_.close();
 }
@@ -368,6 +416,11 @@ void t_js_generator::generate_enum(t_enum* tenum) {
   }
 
   f_types_ << "};"<<endl;
+
+  if (gen_ng_) {
+    // create a constant for enumerated types
+    f_types_ << "module.constant('" << tenum->get_name() << "', " << tenum->get_name() << ");" << endl; 
+  }
 }
 
 /**
@@ -380,6 +433,11 @@ void t_js_generator::generate_const(t_const* tconst) {
 
   f_types_ << js_type_namespace(program_)  << name << " = ";
   f_types_ << render_const_value(type, value) << ";" << endl;
+
+  if (gen_ng_) {
+    // create a constant for constant types
+    f_types_ << "module.constant('" << tconst->get_name() << "', " << tconst->get_name() << ");" << endl; 
+  }
 }
 
 /**
@@ -531,6 +589,9 @@ void t_js_generator::generate_js_struct_definition(ofstream& out,
     } else {
       out << js_namespace(tstruct->get_program()) << tstruct->get_name() << " = function(args) {\n";
     }
+  } else if (gen_ng_) {
+    // ensure function scope
+    out << "var " << tstruct->get_name() <<" = function(args) {\n";
   } else {
     out << js_namespace(tstruct->get_program()) << tstruct->get_name() <<" = function(args) {\n";
   }
@@ -604,7 +665,15 @@ void t_js_generator::generate_js_struct_definition(ofstream& out,
 
   generate_js_struct_reader(out, tstruct);
   generate_js_struct_writer(out, tstruct);
-
+  
+  if (gen_ng_ && is_exported) {
+    // wrap object up in an angular injectable
+    // return only the "class" for types
+    // users will call new to instantiate
+    out << "module.factory('" << tstruct->get_name() << "', function() {" << endl;
+    out << "  return " << tstruct->get_name() << ";" << endl;
+    out << "});" << endl << endl;
+  }
 }
 
 /**
@@ -749,6 +818,9 @@ void t_js_generator::generate_service(t_service* tservice) {
     string f_service_name = get_out_dir()+service_name_+".js";
     f_service_.open(f_service_name.c_str());
 
+    vector<string> ns_pieces = js_namespace_pieces( program_ );
+    string pns;
+
     f_service_ <<
       autogen_comment() <<
       js_includes() << endl <<
@@ -767,6 +839,62 @@ void t_js_generator::generate_service(t_service* tservice) {
 
       f_service_ <<
         "var ttypes = require('./" + program_->get_name() + "_types');" << endl;
+    } else if (gen_ng_) {
+      f_service_ << js_iife_start_ << endl << endl;
+
+      pns = "";
+      if (ns_pieces.size() == 0) {
+        // no namespace but we need something to create a module
+        pns = "Thrift";
+      } else {
+        for(size_t i = 0; i < ns_pieces.size(); ++i) {
+          pns += ((i == 0) ? "" : ".") + ns_pieces[i];
+        }
+      }
+      f_service_ << "var module = angular.module('" << pns << ".Services." << tservice->get_name() << "', ['" << pns << ".Types']);" << endl;
+    }
+
+    const std::vector<t_const*> p_constants = program_->get_consts();
+    const std::vector<t_enum*> p_enums = program_->get_enums();
+    const std::vector<t_struct*> p_objects = program_->get_objects();
+    size_t type_count = p_constants.size() + p_enums.size() + p_objects.size();
+    size_t type_pos = 0;
+    string factory_params = "";
+    if (gen_ng_) {
+      // generate an angular provider with a default transport
+      // and protocol
+      f_service_ << "module.factory('" << service_name_ << "', [";
+
+      // inject all non-service types
+      for(size_t i=0; i < p_constants.size(); ++i) {
+        f_service_ << "'" << p_constants[i]->get_name() << "'";
+        factory_params += p_constants[i]->get_name();
+        type_pos++;
+        f_service_ << ", ";
+        if (type_pos < type_count) {
+          factory_params += ", ";
+        }
+      }
+      for(size_t i=0; i < p_enums.size(); ++i) {
+        f_service_ << "'" << p_enums[i]->get_name() << "'";
+        factory_params += p_enums[i]->get_name();
+        type_pos++;
+        f_service_ << ", ";
+        if (type_pos < type_count) {
+          factory_params += ", ";
+        }
+      }
+      for(size_t i=0; i < p_objects.size(); ++i) {
+        f_service_ << "'" << p_objects[i]->get_name() << "'";
+        factory_params += p_objects[i]->get_name();
+        type_pos++;
+        f_service_ << ", ";
+        if (type_pos < type_count) {
+          factory_params += ", ";
+        }
+      }
+
+      f_service_ << "function(" << factory_params << ") {" << endl;
     }
 
     generate_service_helpers(tservice);
@@ -775,6 +903,18 @@ void t_js_generator::generate_service(t_service* tservice) {
 
     if (gen_node_) {
       generate_service_processor(tservice);
+    }
+
+    if (gen_ng_) {
+      // return created singleton
+      f_service_ << "var transport = new Thrift.Transport('/');" << endl;
+      f_service_ << "var protocol = new Thrift.Protocol(transport);" << endl;
+      f_service_ << "return new " << service_name_ << "Client(protocol);" << endl;
+
+      // end factory
+      f_service_ << "}]);" << endl << endl;
+
+      f_service_ << js_iife_end_ << endl;
     }
 
     f_service_.close();
@@ -1012,6 +1152,8 @@ void t_js_generator::generate_service_client(t_service* tservice) {
     f_service_ <<
         js_namespace(tservice->get_program()) << service_name_ << "Client = " <<
         "exports.Client = function(output, pClass) {"<<endl;
+  } else if (gen_ng_) {
+    f_service_ << "var " << service_name_ << "Client = function(input, output) {"<<endl;
   } else {
     f_service_ <<
         js_namespace(tservice->get_program()) << service_name_ << "Client = function(input, output) {"<<endl;
@@ -1302,7 +1444,6 @@ void t_js_generator::generate_service_client(t_service* tservice) {
 
     }
   }
-
 }
 
 std::string t_js_generator::render_recv_throw(std::string var) {
