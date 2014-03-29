@@ -863,8 +863,9 @@ void t_js_generator::generate_service(t_service* tservice) {
     if (gen_ng_) {
       // generate an angular provider with a default transport
       // and protocol
-      f_service_ << "module.factory('" << service_name_ << "', [";
-
+      f_service_ << "module.provider('" << service_name_ << "Client', function() {" << endl;
+      f_service_ << "this.url = '/" << service_name_ << "';" << endl;
+      f_service_ << "this.$get = [";
       // inject all non-service types
       for(size_t i=0; i < p_constants.size(); ++i) {
         f_service_ << "'" << p_constants[i]->get_name() << "'";
@@ -907,12 +908,14 @@ void t_js_generator::generate_service(t_service* tservice) {
 
     if (gen_ng_) {
       // return created singleton
-      f_service_ << "var transport = new Thrift.Transport('/');" << endl;
+      f_service_ << "var transport = new Thrift.Transport(this.url);" << endl;
       f_service_ << "var protocol = new Thrift.Protocol(transport);" << endl;
       f_service_ << "return new " << service_name_ << "Client(protocol);" << endl;
 
       // end factory
-      f_service_ << "}]);" << endl << endl;
+      f_service_ << "}];" << endl << endl;
+      // end provider
+      f_service_ << "});" << endl << endl;
 
       f_service_ << js_iife_end_ << endl;
     }
