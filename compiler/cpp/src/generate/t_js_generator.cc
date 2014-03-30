@@ -859,8 +859,6 @@ void t_js_generator::generate_service(t_service* tservice) {
     const std::vector<t_const*> p_constants = program_->get_consts();
     const std::vector<t_enum*> p_enums = program_->get_enums();
     const std::vector<t_struct*> p_objects = program_->get_objects();
-    size_t type_count = p_constants.size() + p_enums.size() + p_objects.size();
-    size_t type_pos = 0;
     string factory_params = "";
     if (gen_ng_) {
       // generate an angular provider with a default transport
@@ -870,32 +868,19 @@ void t_js_generator::generate_service(t_service* tservice) {
       f_service_ << "this.$get = [";
       // inject all non-service types
       for(size_t i=0; i < p_constants.size(); ++i) {
-        f_service_ << "'" << p_constants[i]->get_name() << "'";
-        factory_params += p_constants[i]->get_name();
-        type_pos++;
-        f_service_ << ", ";
-        if (type_pos < type_count) {
-          factory_params += ", ";
-        }
+        f_service_ << "'" << p_constants[i]->get_name() << "', ";
+        factory_params += p_constants[i]->get_name() + ", ";
       }
       for(size_t i=0; i < p_enums.size(); ++i) {
-        f_service_ << "'" << p_enums[i]->get_name() << "'";
-        factory_params += p_enums[i]->get_name();
-        type_pos++;
-        f_service_ << ", ";
-        if (type_pos < type_count) {
-          factory_params += ", ";
-        }
+        f_service_ << "'" << p_enums[i]->get_name() << "', ";
+        factory_params += p_enums[i]->get_name() + ", ";
       }
       for(size_t i=0; i < p_objects.size(); ++i) {
-        f_service_ << "'" << p_objects[i]->get_name() << "'";
-        factory_params += p_objects[i]->get_name();
-        type_pos++;
-        f_service_ << ", ";
-        if (type_pos < type_count) {
-          factory_params += ", ";
-        }
+        f_service_ << "'" << p_objects[i]->get_name() << "', ";
+        factory_params += p_objects[i]->get_name() + ", ";
       }
+      f_service_ << "'$http', '$q', ";
+      factory_params += "$http, $q";
 
       f_service_ << "function(" << factory_params << ") {" << endl;
     }
@@ -1272,6 +1257,44 @@ void t_js_generator::generate_service_client(t_service* tservice) {
       indent_down();
       indent_down();
       f_service_ << indent() << "}" << endl;
+    } else if (gen_ng_) {   //angular $http output
+      f_service_ << indent() << "var postData = this.send_" << funname <<
+        "(" << arglist << (arglist.empty() ? "" : ", ") << "true);" << endl;
+      // simply wrap up the request in an $http call and
+      // resolve/reject a custom deferred
+      // service methods always return a promise
+      // TODO properly indent this
+      f_service_ << "var deferred = $q.defer();\n"
+        "var transport = this.output.getTransport();\n"
+        "var This = this;\n"
+        "$http({\n"
+        "  method: 'POST',\n"
+        "  url: transport.url,\n"
+        "  data: postData,\n"
+        "  headers: {\n"
+        "    'Content-Type': 'application/json'\n"
+        "  },\n"
+        "  transformResponse: function(data) {\n"
+        "try {\n"
+        "transport.setRecvBuffer(data);\n"
+        "    return This.recv_" << funname << "();\n"
+        "} catch(e) {\n"
+        "if (e instanceof Thrift.TException) {\n"
+        "deferred.reject(e);\n"
+        "return null;\n"
+        "} else {\n"
+        "throw e\n"
+        "}\n"
+        "}\n"
+        "}\n"
+        "}).success(function(data, status, headers, config) {\n"
+        "if (data !== null) {\n"
+        "deferred.resolve(data);\n"
+        "}\n"
+        "}).error(function(data, status, headers, config) {\n"
+        "deferred.reject(new Thrift.TException('Transport Error'));\n"
+        "});\n"
+        "return deferred.promise;\n";
     } else {                  //Standard JavaScript ./gen-js
       f_service_ << indent() <<
         "this.send_" << funname << "(" << arglist << (arglist.empty() ? "" : ", ") << "callback); " << endl;
@@ -1334,6 +1357,8 @@ void t_js_generator::generate_service_client(t_service* tservice) {
     } else {
       if (gen_jquery_) {
         f_service_ << indent() << "return this.output.getTransport().flush(callback);" << endl;
+      } else if (gen_ng_) {
+        f_service_ << indent() << "return this.output.getTransport().flush(true);" << endl;
       } else {
         f_service_ << indent() << "if (callback) {" << endl;
         f_service_ << indent() << "  var self = this;" << endl;
@@ -1992,10 +2017,13 @@ string t_js_generator::argument_list(t_struct* tstruct,
   }
 
   if (include_callback) {
-    if (!fields.empty()) {
-      result += ", ";
+    if (!gen_ng_) {
+      // angular generator will always return a promise object
+      if (!fields.empty()) {
+        result += ", ";
+      }
+      result += "callback";
     }
-    result += "callback";
   }
 
   return result;
