@@ -85,8 +85,8 @@ class t_cocoa_generator : public t_oop_generator {
   std::string render_const_value(ofstream& out, t_type* type, t_const_value* value, bool containerize_it=false);
 
   void generate_cocoa_struct(t_struct* tstruct, bool is_exception);
-  void generate_cocoa_struct_interface(std::ofstream& out, t_struct* tstruct, bool is_xception=false);
-  void generate_cocoa_struct_implementation(std::ofstream& out, t_struct* tstruct, bool is_xception=false, bool is_result=false);
+  void generate_cocoa_struct_interface(std::ofstream& out, t_struct* tstruct, string prefix, bool is_xception=false);
+  void generate_cocoa_struct_implementation(std::ofstream& out, t_struct* tstruct, string prefix, bool is_xception=false, bool is_result=false);
   void generate_cocoa_struct_initializer_signature(std::ofstream& out,
                                                    t_struct* tstruct);
   void generate_cocoa_struct_init_with_coder_method(ofstream &out,
@@ -102,14 +102,14 @@ class t_cocoa_generator : public t_oop_generator {
                                                             t_struct* tstruct,
                                                             bool is_exception);
   void generate_cocoa_struct_reader(std::ofstream& out, t_struct* tstruct);
-  void generate_cocoa_struct_result_writer(std::ofstream& out, t_struct* tstruct);
+  void generate_cocoa_struct_result_writer(std::ofstream& out, t_struct* tstruct, string prefix);
   void generate_cocoa_struct_writer(std::ofstream& out, t_struct* tstruct);
   void generate_cocoa_struct_validator(std::ofstream& out, t_struct* tstruct);
   void generate_cocoa_struct_description(std::ofstream& out, t_struct* tstruct);
 
-  std::string function_result_helper_struct_type(t_function* tfunction);
-  std::string function_args_helper_struct_type(t_function* tfunction);
-  void generate_function_helpers(t_function* tfunction);
+  std::string function_result_helper_struct_type(string prefix, t_function* tfunction);
+  std::string function_args_helper_struct_type(t_service* tservice, t_function* tfunction);
+  void generate_function_helpers(string prefix, t_function* tfunction);
 
   /**
    * Service-level generation functions
@@ -440,8 +440,8 @@ void t_cocoa_generator::generate_consts(std::vector<t_const*> consts) {
  * @param tstruct The struct definition
  */
 void t_cocoa_generator::generate_struct(t_struct* tstruct) {
-  generate_cocoa_struct_interface(f_header_, tstruct, false);
-  generate_cocoa_struct_implementation(f_impl_, tstruct, false);
+  generate_cocoa_struct_interface(f_header_, tstruct, "", false);
+  generate_cocoa_struct_implementation(f_impl_, tstruct, "", false);
 }
 
 /**
@@ -450,8 +450,8 @@ void t_cocoa_generator::generate_struct(t_struct* tstruct) {
  * @param tstruct The struct definition
  */
 void t_cocoa_generator::generate_xception(t_struct* txception) {
-  generate_cocoa_struct_interface(f_header_, txception, true);
-  generate_cocoa_struct_implementation(f_impl_, txception, true);
+  generate_cocoa_struct_interface(f_header_, txception, "", true);
+  generate_cocoa_struct_implementation(f_impl_, txception, "", true);
 }
 
 
@@ -462,8 +462,9 @@ void t_cocoa_generator::generate_xception(t_struct* txception) {
  */
 void t_cocoa_generator::generate_cocoa_struct_interface(ofstream &out,
                                                       t_struct* tstruct,
+                                                      string prefix,
                                                       bool is_exception) {
-  out << "@interface " << cocoa_prefix_ << tstruct->get_name() << " : ";
+  out << "@interface " << cocoa_prefix_ << prefix << tstruct->get_name() << " : ";
 
   if (is_exception) {
     out << "NSException ";
@@ -721,10 +722,16 @@ void t_cocoa_generator::generate_cocoa_struct_encode_with_coder_method(ofstream 
  */
 void t_cocoa_generator::generate_cocoa_struct_implementation(ofstream &out,
                                                              t_struct* tstruct,
+                                                             string prefix,
                                                              bool is_exception,
                                                              bool is_result) {
-  indent(out) <<
-    "@implementation " << cocoa_prefix_ << tstruct->get_name() << endl << endl;
+  if (is_result) {
+    indent(out) <<
+      "@implementation " << cocoa_prefix_ << tstruct->get_name() << endl << endl;
+  } else {
+    indent(out) <<
+      "@implementation " << cocoa_prefix_ << prefix << tstruct->get_name() << endl << endl;
+  }
 
   const vector<t_field*>& members = tstruct->get_members();
   vector<t_field*>::const_iterator m_iter;
@@ -733,7 +740,7 @@ void t_cocoa_generator::generate_cocoa_struct_implementation(ofstream &out,
   if (is_exception) {
     out << indent() << "- (id) init" << endl;
     scope_up(out);
-    out << indent() << "return [super initWithName: @\"" << cocoa_prefix_ << tstruct->get_name() <<
+    out << indent() << "return [super initWithName: @\"" << cocoa_prefix_ << prefix << tstruct->get_name() <<
         "\" reason: @\"unknown\" userInfo: nil];" << endl;
     scope_down(out);
     out << endl;
@@ -813,7 +820,7 @@ void t_cocoa_generator::generate_cocoa_struct_implementation(ofstream &out,
   generate_cocoa_struct_field_accessor_implementations(out, tstruct, is_exception);
   generate_cocoa_struct_reader(out, tstruct);
   if (is_result) {
-    generate_cocoa_struct_result_writer(out, tstruct);
+    generate_cocoa_struct_result_writer(out, tstruct, prefix);
   } else {
     generate_cocoa_struct_writer(out, tstruct);
   }
@@ -997,7 +1004,8 @@ void t_cocoa_generator::generate_cocoa_struct_writer(ofstream& out,
  * @param tstruct The struct definition
  */
 void t_cocoa_generator::generate_cocoa_struct_result_writer(ofstream& out,
-                                                            t_struct* tstruct) {
+                                                            t_struct* tstruct,
+                                                            string prefix) {
   out <<
     indent() << "- (void) write: (id <TProtocol>) outProtocol {" << endl;
   indent_up();
@@ -1006,8 +1014,10 @@ void t_cocoa_generator::generate_cocoa_struct_result_writer(ofstream& out,
   const vector<t_field*>& fields = tstruct->get_members();
   vector<t_field*>::const_iterator f_iter;
 
+  string structName = name.substr(prefix.size());
+
   out <<
-    indent() << "[outProtocol writeStructBeginWithName: @\"" << name << "\"];" << endl;
+    indent() << "[outProtocol writeStructBeginWithName: @\"" << structName << "\"];" << endl;
 
   bool first = true;
   for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
@@ -1225,24 +1235,25 @@ void t_cocoa_generator::generate_service(t_service* tservice) {
 void t_cocoa_generator::generate_cocoa_service_helpers(t_service* tservice) {
   vector<t_function*> functions = tservice->get_functions();
   vector<t_function*>::iterator f_iter;
+  string prefix = tservice->get_name() + "_";
   for (f_iter = functions.begin(); f_iter != functions.end(); ++f_iter) {
     t_struct* ts = (*f_iter)->get_arglist();
-    generate_cocoa_struct_interface(f_impl_, ts, false);
-    generate_cocoa_struct_implementation(f_impl_, ts, false, false);  
-    generate_function_helpers(*f_iter);
+    generate_cocoa_struct_interface(f_impl_, ts, prefix, false);
+    generate_cocoa_struct_implementation(f_impl_, ts, prefix, false, false);  
+    generate_function_helpers(prefix, *f_iter);
   }
 }
 
-string t_cocoa_generator::function_result_helper_struct_type(t_function* tfunction) {
+string t_cocoa_generator::function_result_helper_struct_type(string prefix, t_function* tfunction) {
   if (tfunction->is_oneway()) {
-    return capitalize(tfunction->get_name());
+    return prefix + capitalize(tfunction->get_name());
   } else {
-    return capitalize(tfunction->get_name()) + "_result";
+    return prefix + capitalize(tfunction->get_name()) + "_result";
   }
 }
 
 
-string t_cocoa_generator::function_args_helper_struct_type(t_function* tfunction) {
+string t_cocoa_generator::function_args_helper_struct_type(t_service* tservice, t_function* tfunction) {
   return tfunction->get_name() + "_args";
 }
 
@@ -1252,14 +1263,14 @@ string t_cocoa_generator::function_args_helper_struct_type(t_function* tfunction
  *
  * @param tfunction The function
  */
-void t_cocoa_generator::generate_function_helpers(t_function* tfunction) {
+void t_cocoa_generator::generate_function_helpers(string prefix, t_function* tfunction) {
   if (tfunction->is_oneway()) {
     return;
   }
 
   // create a result struct with a success field of the return type,
   // and a field for each type of exception thrown
-  t_struct result(program_, function_result_helper_struct_type(tfunction));
+  t_struct result(program_, function_result_helper_struct_type(prefix, tfunction));
   t_field success(tfunction->get_returntype(), "success", 0);
   if (!tfunction->get_returntype()->is_void()) {
     result.append(&success);
@@ -1273,8 +1284,8 @@ void t_cocoa_generator::generate_function_helpers(t_function* tfunction) {
   }
 
   // generate the result struct
-  generate_cocoa_struct_interface(f_impl_, &result, false);
-  generate_cocoa_struct_implementation(f_impl_, &result, false, true);  
+  generate_cocoa_struct_interface(f_impl_, &result, "", false);
+  generate_cocoa_struct_implementation(f_impl_, &result, prefix, false, true);  
 }
 
 
@@ -1391,7 +1402,7 @@ void t_cocoa_generator::generate_cocoa_service_client_implementation(ofstream& o
                              string("send_") + (*f_iter)->get_name(),
                              (*f_iter)->get_arglist());
 
-    string argsname = (*f_iter)->get_name() + "_args";
+    string argsname = cocoa_prefix_ + function_args_helper_struct_type(tservice, *f_iter);
 
     // Open function
     indent(out) <<
@@ -1468,7 +1479,7 @@ void t_cocoa_generator::generate_cocoa_service_client_implementation(ofstream& o
         indent() << "}" << endl;
 
       // FIXME - could optimize here to reduce creation of temporary objects.
-      string resultname = function_result_helper_struct_type(*f_iter);
+      string resultname = function_result_helper_struct_type(tservice->get_name() + "_", *f_iter);
       out <<
         indent() << cocoa_prefix_ << resultname << " * result = [[[" << cocoa_prefix_ <<
         resultname << " alloc] init] autorelease_stub];" << endl;
@@ -1636,14 +1647,14 @@ void t_cocoa_generator::generate_cocoa_service_server_implementation(ofstream& o
     string funname = (*f_iter)->get_name();
     out << indent() << "- (void) process_" << funname << "_withSequenceID: (int32_t) seqID inProtocol: (id<TProtocol>) inProtocol outProtocol: (id<TProtocol>) outProtocol" << endl;
     scope_up(out);
-    string argstype = cocoa_prefix_ + function_args_helper_struct_type(*f_iter);
+    string argstype = tservice->get_name() + "_" + cocoa_prefix_ + function_args_helper_struct_type(tservice, *f_iter);
     out << indent() << argstype << " * args = [[" << argstype << " alloc] init];" << endl;
     out << indent() << "[args read: inProtocol];" << endl;
     out << indent() << "[inProtocol readMessageEnd];" << endl;
     
     // prepare the result if not oneway
     if (!(*f_iter)->is_oneway()) {
-        string resulttype = cocoa_prefix_ + function_result_helper_struct_type(*f_iter);
+        string resulttype = cocoa_prefix_ + function_result_helper_struct_type(tservice->get_name() + "_", *f_iter);
         out << indent() << resulttype << " * result = [[" << resulttype << " alloc] init];" << endl;
     }
 
